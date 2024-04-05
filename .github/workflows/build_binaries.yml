@@ -57,45 +57,55 @@ jobs:
               echo "Soplex version: ${{github.event.inputs.soplex_version}}"
               echo "IPOPT version: ${{github.event.inputs.ipopt_version}}"
 
-    build-binaries:
+    macos-build-binaries:
         strategy:
             matrix:
               include:
                 - os: macos-14
                   bash_script: macos_arm.bash
-                  id: macos-arm
+                  id: macos-aarch64
                 - os: macos-latest
                   bash_script: macos.bash
-                  id: macos
+                  id: macos-x86-64
 
         runs-on: ${{ matrix.os }}
         steps:
             - uses: actions/checkout@v3
             - name: Build and install SCIP
               run: |
-                export SCIP_VERSION=$(echo "${{github.event.inputs.scip_version}}" | tr -d '.')
-                export SOPLEX_VERSION=$(echo "${{github.event.inputs.soplex_version}}" | tr -d '.')
+                export SCIP_VERSION=$(echo "${{ github.event.inputs.scip_version }}" | tr -d '.')
+                export SOPLEX_VERSION=$(echo "${{ github.event.inputs.soplex_version }}" | tr -d '.')
                 export IPOPT_VERSION=${{ github.event.inputs.ipopt_version }}
                 bash .github/workflows/scripts/${{ matrix.bash_script }}
         
             - uses: actions/upload-artifact@v3
               with:
-                path: ${{ github.workspace }}/libscip-${{matrix.id}}.zip
+                path: ${{ github.workspace }}/libscip-${{ matrix.id }}.zip
 
     linux-build-binaries:
-        runs-on: ubuntu-latest
-        container: quay.io/pypa/manylinux2014_x86_64
+        strategy:
+            matrix:
+              include:
+                - os: ubuntu-22.04
+                  container: quay.io/pypa/manylinux2014_x86_64
+                  id: ubuntu-x86-64
+                - os: ubuntu-latest
+                  container: quay.io/pypa/manylinux2014_aarch64
+                  id: ubuntu-aarch64
+
+        runs-on: ${{ matrix.os }}
+        container: ${{ matrix.container }}
         steps:
             - uses: actions/checkout@v3
             - name: Build and install SCIP
               run: |
-                export SCIP_VERSION=$(echo "${{github.event.inputs.scip_version}}" | tr -d '.')
-                export SOPLEX_VERSION=$(echo "${{github.event.inputs.soplex_version}}" | tr -d '.')
+                export SCIP_VERSION=$(echo "${{ github.event.inputs.scip_version }}" | tr -d '.')
+                export SOPLEX_VERSION=$(echo "${{ github.event.inputs.soplex_version }}" | tr -d '.')
                 export IPOPT_VERSION=${{ github.event.inputs.ipopt_version }}
                 bash -x .github/workflows/scripts/linux.bash
             - uses: actions/upload-artifact@v3
               with:
-                path: ${{ github.workspace }}/libscip-linux.zip
+                path: ${{ github.workspace }}/libscip-${{ matrix.id }}.zip
 
     windows-build-binaries:
         runs-on: windows-latest
