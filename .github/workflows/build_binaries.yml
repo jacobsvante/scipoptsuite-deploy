@@ -89,7 +89,7 @@ jobs:
                 - os: ubuntu-22.04
                   container: quay.io/pypa/manylinux2014_x86_64
                   id: ubuntu-x86-64
-                - os: ubuntu-latest
+                - os: buildjet-2vcpu-ubuntu-2204-arm
                   container: quay.io/pypa/manylinux2014_aarch64
                   id: ubuntu-aarch64
 
