@@ -10,7 +10,7 @@ on:
 
 env:
   IMAGE_NAME: scipoptsuite
-  REPOSITORY_NAME: scipoptsuite
+  REPOSITORY_NAME: jacobsvante
 
 jobs:
   build:
