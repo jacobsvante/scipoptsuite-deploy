@@ -1,0 +1,303 @@
+# Helpers to read out "target triple" from dockers automatic ARGs
+# See here for more info: https://github.com/tonistiigi/xx
+FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
+
+FROM --platform=$BUILDPLATFORM alpine:3.19 AS gcc_fortran_cross
+COPY --from=xx / /
+ARG TARGETPLATFORM
+
+RUN apk add --no-cache curl alpine-sdk xz
+
+WORKDIR /build
+
+RUN curl -L https://github.com/richfelker/musl-cross-make/archive/678797f0625ea9e7a74aebdc0b7d2afcf3d66e07.tar.gz \
+    | tar -xz --strip-components 1
+
+RUN echo "TARGET = $(xx-info)" > ./config.mak
+RUN cat <<EOF >> ./config.mak
+GCC_CONFIG += --enable-languages=c,c++,fortran
+GCC_CONFIG += --disable-shared
+GCC_CONFIG += --enable-static
+GCC_CONFIG += --enable-default-pie --enable-static-pie
+COMMON_CONFIG += LDFLAGS='-static --static'
+OUTPUT = /musl-cross-make
+EOF
+
+RUN mkdir /musl-cross-make \
+    && make -j$(nproc)
+
+RUN make install \
+    && cd / \
+    && rm -rf /build
+
+
+FROM --platform=$BUILDPLATFORM gcc_fortran_cross AS build_base
+
+WORKDIR /work
+
+RUN apk add --no-cache file curl make cmake binutils m4
+ARG TARGETPLATFORM
+
+# Install build target platform package headers and libraries needed for compilation
+RUN xx-apk add --no-cache \
+    musl-dev \
+    boost-dev \
+    zlib-static \
+    zstd-static \
+    zlib-dev
+
+RUN ln -s /musl-cross-make/bin/$(xx-info)-gcc /usr/bin/xx-gcc \
+    && ln -s /musl-cross-make/bin/$(xx-info)-g++ /usr/bin/xx-g++ \
+    && ln -s /musl-cross-make/bin/$(xx-info)-gfortran /usr/bin/xx-gfortran
+
+ENV CC=xx-gcc \
+    CXX=xx-g++ \
+    FC=xx-gfortran
+
+ARG TEST=1
+ENV CFLAGS="-Os -fPIC -fPIE -static --static" \
+    CXXFLAGS="-Os -fPIC -fPIE -static --static" \
+    LDFLAGS="-Os -fPIC -fPIE -static --static" \
+    TEST=${TEST}
+
+RUN mkdir hello \
+    && cd hello \
+    && printf "#include <stdio.h>\nint main() {printf(\"Hello!\");return 0;}" > ./hello.c \
+    && $CC $LDFLAGS hello.c -o hello \
+    && ls -ahl \
+    && file hello \
+    && [ $(./hello) = "Hello!" ] \
+    && xx-verify --static hello \
+    && cd .. && rm -rf hello
+
+# Lapack
+# Download from: https://github.com/Reference-LAPACK/lapack
+FROM build_base AS lapack
+ARG LAPACK_VERSION=3.12.0
+
+RUN curl -L https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v${LAPACK_VERSION}.tar.gz \
+        | tar -xz --strip-components 1
+
+RUN mkdir build \
+    && cd build \
+    && cmake \
+        -DBUILD_SHARED_LIBS=off \
+        -DCMAKE_CROSSCOMPILING=on \
+        -DCMAKE_SYSTEM_NAME=Linux \
+        -DCMAKE_INSTALL_PREFIX=/work/lapack \
+        .. \
+    && make -j \
+    && make install
+
+# GMP
+# Homepage: https://gmplib.org/
+# Download from: https://github.com/pmmp/DependencyMirror
+FROM build_base AS gmp
+ARG GMP_VERSION=6.3.0
+RUN mkdir build && \
+    curl -L https://github.com/pmmp/DependencyMirror/releases/download/mirror/gmp-${GMP_VERSION}.tar.xz \
+        | tar -xJ --strip-components 1 -C build
+RUN cd build \
+    && ./configure \
+        --host=$(xx-info) \
+        --with-pic \
+        --disable-shared \
+        --enable-cxx \
+        --prefix=/work/gmp \
+    && make install -j
+
+# Metis & GKlib
+# https://github.com/KarypisLab/GKlib
+# https://github.com/KarypisLab/METIS
+FROM build_base AS metis
+ARG METIS_VERSION=5.1.1
+RUN mkdir metis gklib metis-build
+RUN curl -L https://github.com/KarypisLab/GKlib/archive/refs/tags/METIS-v${METIS_VERSION}-DistDGL-0.5.tar.gz \
+        | tar -xz --strip-components 1 -C gklib
+RUN curl -L https://github.com/KarypisLab/METIS/archive/refs/tags/v${METIS_VERSION}-DistDGL-v0.5.tar.gz \
+        | tar -xz --strip-components 1 -C metis-build
+COPY ./cross/patches/gklib ./patches/gklib
+RUN cd gklib \
+    && git apply --verbose ../patches/gklib/*.diff \
+    && make install cc=$CC \
+    && make config prefix=/work/gklib cc=$CC
+RUN cd metis-build \
+    && make config prefix=/work/metis/ gklib_path=/work/gklib \
+    && make \
+    && make install
+
+# MUMPS
+# https://github.com/scivision/mumps
+# http://mumps-solver.org/
+FROM build_base AS mumps
+# TODO: What was the reason for switching to scipvision's version?
+# ARG THIRDPARTY_MUMPS_VERSION=3.0.5
+# RUN curl -L https://github.com/coin-or-tools/ThirdParty-Mumps/archive/refs/tags/releases/${THIRDPARTY_MUMPS_VERSION}.tar.gz \
+ARG SCIPVISION_MUMPS_VERSION=5.6.2.3
+RUN curl -L https://github.com/scivision/mumps/archive/refs/tags/v${SCIPVISION_MUMPS_VERSION}.tar.gz \
+        | tar -xz --strip-components 1
+COPY --from=lapack /work/lapack /usr
+COPY --from=metis /work/metis /usr
+RUN mkdir build \
+    && cd build \
+    && cmake \
+        -DBUILD_SHARED_LIBS=off \
+        -DCMAKE_SYSTEM_NAME=Linux \
+        -DCMAKE_CROSSCOMPILING=on \
+        -Dmetis=true \
+        -Dparallel=false \
+        -DCMAKE_INSTALL_PREFIX=/work/mumps \
+        .. \
+    && make install
+
+# IPOPT
+# https://github.com/coin-or/Ipopt
+# https://coin-or.github.io/Ipopt/INSTALL.html
+# TODO: Fix issue with running tests
+FROM build_base AS ipopt
+ARG IPOPT_VERSION=3.14.16
+# ipopt tests need bash installed (!)
+RUN apk add --no-cache bash
+RUN curl -L https://github.com/coin-or/Ipopt/archive/refs/tags/releases/${IPOPT_VERSION}.tar.gz \
+        | tar -xz --strip-components 1
+COPY --from=mumps /work/mumps /crossed
+COPY --from=metis /work/metis /crossed
+COPY --from=lapack /work/lapack /crossed
+# NOTE: We remove libgfortran.la & libquadmath.la to prevent below error:
+#       "'/x86_64-alpine-linux-musl/lib/libquadmath.la' is not a valid libtool archive"
+# TODO: What is the proper solution?
+RUN cd /musl-cross-make/$(xx-info)/lib && rm -f libgfortran.la libquadmath.la
+RUN export QUADMATH=$(if [ "$(xx-info march)" = "x86_64" ]; then echo '-lquadmath'; fi) \
+    && mkdir build \
+    && cd build \
+    # TODO: If we use /work/ipopt instead we get error:
+    #           Imported target "PkgConfig::_PC_IPOPT" includes non-existent path "/work/ipopt/include/coin-or"
+    && ../configure --prefix=/work/scip_install/ \
+        --with-pic=yes \
+        --enable-static=yes \
+        --enable-shared=no \
+        --disable-java \
+        --disable-sipopt \
+        --with-mumps-cflags="-I/crossed/include" \
+        --with-mumps-lflags="-L/crossed/lib -L/musl-cross-make/$(xx-info)/lib -ldmumps -lmumps_common -lmetis -llapack -lblas -lmpiseq -lpord -lgfortran -lm" \
+        --disable-linear-solver-loader \
+        --with-lapack-lflags="-L/crossed/lib -L/musl-cross-make/$(xx-info)/lib -llapack -lblas -lgfortran $QUADMATH" \
+        || (cat config.log && exit 1) \
+    && make -j$(nproc) \
+    && if [ "$TEST" = "1" ]; \
+        then make test V=1; \
+        else echo "Not running tests (TEST=1 not provided)"; \
+    fi \
+    && make install
+
+# Soplex
+# https://github.com/scipopt/soplex
+# https://soplex.zib.de/doc/html/INSTALL.php
+# TODO: Support papilo?
+# TODO: Support MPFR?
+FROM build_base AS soplex
+ARG SOPLEX_VERSION=7.0.0
+RUN curl -L https://github.com/scipopt/soplex/archive/refs/tags/release-$(echo ${SOPLEX_VERSION} | tr -d .).tar.gz \
+    | tar -xz --strip-components 1
+COPY --from=gmp /work/gmp /usr
+COPY ./cross/patches/soplex ./patches/soplex
+# Soplex wants dynamic libz.so...
+RUN find / -name libz.so -exec rm {} \;
+RUN git apply --verbose ./patches/soplex/*.diff \
+    && mkdir build \
+    && cd build \
+    && cmake .. \
+        -DCMAKE_INSTALL_PREFIX=/work/scip_install \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGMP=true \
+        -DSTATIC_GMP=true \
+        -DPAPILO=false \
+        -DBOOST=true \
+        # TODO: Support boost when cross compiling - currently getting lots of compilation
+        #       errors when uncommenting -DBOOST_ROOT below. One example:
+        #       /x86_64-alpine-linux-musl/usr/include/boost/multiprecision/gmp.hpp:2635:22: error: call of overloaded ‘floor(__float128&)’ is ambiguous
+        # -DBOOST_ROOT=/$(xx-info)/usr \
+    && make -j$(nproc) \
+    && if [ "$TEST" = "1" ]; \
+        then make test; \
+        else echo "Not running tests (TEST=1 not provided)"; \
+    fi \
+    && make install
+RUN xx-verify --static ./scip_install/bin/soplex
+
+# SCIP
+# https://github.com/scipopt/scip
+# https://scipopt.org/doc/html/md_INSTALL.php
+FROM build_base AS scip
+ARG SCIP_VERSION=9.0.0
+RUN curl -L https://github.com/scipopt/scip/archive/refs/tags/v$(echo $SCIP_VERSION | tr -d .).tar.gz \
+    | tar -xz --strip-components 1
+COPY --from=mumps /work/mumps /usr
+COPY --from=metis /work/metis /usr
+COPY --from=gmp /work/gmp /usr
+COPY --from=lapack /work/lapack /usr
+COPY --from=ipopt /work/scip_install /work/scip_install
+COPY --from=soplex /work/scip_install /work/scip_install
+# Scip wants dynamic libz.so...
+RUN find / -name libz.so -exec rm {} \;
+RUN mkdir build \
+    && cd build \
+    && cmake .. \
+        -DARCH=$(xx-info march)\
+        -DCMAKE_INSTALL_PREFIX=/work/scip_install \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DLPS=spx \
+        -DSYM=snauty \
+        -DSOPLEX_DIR=/work/scip_install \
+        -DPAPILO=off \
+        -DZIMPL=off \
+        -DGMP=on \
+        -DGMP_DIR=/usr \
+        -DREADLINE=off \
+        -DIPOPT=on \
+        -DIPOPT_DIR=/work/scip_install \
+        -DLAPACK=off \
+        -DSHARED=off \
+        # libz.a ends up in different locations depending on if build natively or cross compiled
+        -DZLIB_LIBRARY=$(test -f /lib/libz.a && echo /lib/libz.a || echo /$(xx-info)/lib/libz.a) \
+        -DZLIB_INCLUDE_DIR=$(test -f /lib/libz.a && echo /usr/include || echo /$(xx-info)/usr/include) \
+    && make -j$(nproc) VERBOSE=true \
+    && if [ "$TEST" = "1" ]; \
+        then MAXJOBS=$(nproc) make test; \
+        else echo "Not running tests (TEST=1 not provided)"; \
+    fi \
+    && make install
+RUN xx-verify --static ./scip_install/bin/scip
+
+# # Verify that soplex and scip can run on Alpine
+# FROM alpine:3.9 AS alpine_tester
+# COPY --from=xx / /
+# RUN apk add --no-cache file binutils
+# COPY --from=scip /work/scip_install/bin /usr/bin
+# COPY --from=scip /work/scip_install/lib /usr/lib
+# COPY --from=scip /work/scip_install/include /usr/include
+# COPY cross/verify.sh .
+# RUN chmod +x ./verify.sh
+# CMD [ "./verify.sh" ]
+
+# # Verify that soplex and scip can run on Debian
+# FROM debian:bookworm-slim AS debian_tester
+# RUN apt-get update && apt-get install -y binutils file
+# COPY --from=scip /work/scip_install/bin /usr/bin
+# COPY --from=scip /work/scip_install/lib /usr/lib
+# COPY --from=scip /work/scip_install/include /usr/include
+# COPY cross/verify.sh .
+# RUN chmod +x ./verify.sh
+# CMD [ "./verify.sh" ]
+
+# Collect all files and compress them as zip and tar.gz
+FROM alpine:3.19 AS compress
+WORKDIR /work
+COPY --from=scip /work/scip_install /work/scip_install
+RUN apk add --no-cache zip
+RUN zip -9 -r /work/libscip-linux.zip scip_install/lib scip_install/include scip_install/bin \
+    && tar -czvf /work/libscip-linux.tar.gz scip_install/lib scip_install/include scip_install/bin
+
+# For use with docker build --output=.., to extract the zip/tar.gz files.
+FROM scratch AS deliverables
+COPY --from=compress /work/libscip-linux.* /

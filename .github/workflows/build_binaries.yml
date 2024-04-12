@@ -1,16 +1,15 @@
 name: build-binaries
 
-
-# Authors: 
+# Authors:
 # Mark Turner
-# Mohammed Ghannam 
+# Mohammed Ghannam
 # Stefan Vigerske
 # Franziska Schloesser
 # Julian Manns
 # Michael Winkler
 #
 # This is the base workflow script for generating SCIP libraries.
-# These libraries intended purpose is to be shipped with the various 
+# These libraries intended purpose is to be shipped with the various
 # SCIP interfaces for different programming languages (e.g. Python and Rust).
 # These libraries enable users of those interfaces to not have to install SCIP themselves outside of
 # the traditional package managers of their preferred programming languages.
@@ -23,12 +22,21 @@ name: build-binaries
 #
 # Current support:
 # Linux x86-64
+# Linux AArch64
 # MacOS x86-64
-# MacOS ARM64
+# MacOS AArch64
 # Windows x86-64
 #
 
+env:
+    SCIP_VERSION: "9.0.0"
+    SOPLEX_VERSION: "7.0.0"
+    IPOPT_VERSION: "3.14.16"
+
 on:
+    push:
+        branches:
+            - crosscompile
     workflow_dispatch:
         inputs:
             scip_version:
@@ -45,83 +53,74 @@ on:
                 type: string
                 description: IPOPT version to use
                 required: true
-                default: "3.14.12"
+                default: "3.14.16"
 
 jobs:
     print-inputs:
-      runs-on: ubuntu-latest
-      steps:
-          - name: Print inputs
-            run: |
-              echo "SCIP version: ${{github.event.inputs.scip_version}}"
-              echo "Soplex version: ${{github.event.inputs.soplex_version}}"
-              echo "IPOPT version: ${{github.event.inputs.ipopt_version}}"
-
-    macos-build-binaries:
-        strategy:
-            matrix:
-              include:
-                - os: macos-14
-                  bash_script: macos_arm.bash
-                  id: macos-aarch64
-                - os: macos-latest
-                  bash_script: macos.bash
-                  id: macos-x86-64
-
-        runs-on: ${{ matrix.os }}
+        runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v3
-            - name: Build and install SCIP
+            - name: Print inputs
               run: |
-                export SCIP_VERSION=$(echo "${{ github.event.inputs.scip_version }}" | tr -d '.')
-                export SOPLEX_VERSION=$(echo "${{ github.event.inputs.soplex_version }}" | tr -d '.')
-                export IPOPT_VERSION=${{ github.event.inputs.ipopt_version }}
-                bash .github/workflows/scripts/${{ matrix.bash_script }}
-        
-            - uses: actions/upload-artifact@v3
-              with:
-                path: ${{ github.workspace }}/libscip-${{ matrix.id }}.zip
+                  echo "SCIP version: ${{ github.event.inputs.scip_version }}"
+                  echo "Soplex version: ${{ github.event.inputs.soplex_version }}"
+                  echo "IPOPT version: ${{ github.event.inputs.ipopt_version }}"
 
     linux-build-binaries:
+        runs-on: ubuntu-22.04
         strategy:
+            fail-fast: false
             matrix:
-              include:
-                - os: ubuntu-22.04
-                  container: quay.io/pypa/manylinux2014_x86_64
-                  id: ubuntu-x86-64
-                - os: buildjet-2vcpu-ubuntu-2204-arm
-                  container: quay.io/pypa/manylinux2014_aarch64
-                  id: ubuntu-aarch64
-
-        runs-on: ${{ matrix.os }}
-        container: ${{ matrix.container }}
+                entry:
+                    - os: linux
+                      platform: linux/amd64
+                    - os: linux
+                      platform: linux/arm64/v8
+                    - os: linux
+                      platform: linux/386
+                    - os: linux
+                      platform: linux/arm/v6
+                    - os: linux
+                      platform: linux/arm/v7
+                    - os: linux
+                      platform: linux/ppc64le
+                    - os: linux
+                      platform: linux/s390x
         steps:
-            - uses: actions/checkout@v3
-            - name: Build and install SCIP
-              run: |
-                export SCIP_VERSION=$(echo "${{ github.event.inputs.scip_version }}" | tr -d '.')
-                export SOPLEX_VERSION=$(echo "${{ github.event.inputs.soplex_version }}" | tr -d '.')
-                export IPOPT_VERSION=${{ github.event.inputs.ipopt_version }}
-                bash -x .github/workflows/scripts/linux.bash
-            - uses: actions/upload-artifact@v3
+            - uses: actions/checkout@v4
+            # apk add seems to need qemu for some triggers, even though we're
+            # cross compiling...
+            # See this guide for more info:
+            # https://www.docker.com/blog/faster-multi-platform-builds-dockerfile-cross-compilation-guide/
+            # (setup-qemu-action uses the mentioned tonistiigi/binfmt internally)
+            - uses: docker/setup-qemu-action@v3
+            - id: buildx
+              uses: docker/setup-buildx-action@v3
               with:
-                path: ${{ github.workspace }}/libscip-${{ matrix.id }}.zip
-
-    windows-build-binaries:
-        runs-on: windows-latest
-        steps:
-          - uses: actions/checkout@v3
-          - uses: msys2/setup-msys2@v2      
-      
-          - name: Build and install SCIP
-            run:  |
-              export SCIP_VERSION=$(echo "${{github.event.inputs.scip_version}}" | tr -d '.')
-              export SOPLEX_VERSION=$(echo "${{github.event.inputs.soplex_version}}" | tr -d '.')
-              export IPOPT_VERSION=${{ github.event.inputs.ipopt_version }}
-              bash -x .github/workflows/scripts/windows.bash
-            shell: msys2 {0}
-          
-          - uses: actions/upload-artifact@v3
-            with:
-              path: ${{ github.workspace }}/libscip-windows.zip
-
+                  platforms: |
+                      linux/386
+                      linux/amd64
+                      linux/arm/v6
+                      linux/arm/v7
+                      linux/arm64/v8
+                      linux/ppc64le
+                      linux/riscv64
+                      linux/s390x
+            - run: echo ${{ steps.buildx.outputs }}
+            - run: docker buildx ls
+            - uses: docker/build-push-action@v5
+              with:
+                  push: false
+                  file: Dockerfile.musl-cross
+                  build-args: |
+                      SCIP_VERSION=${{ github.event.inputs.scip_version || env.SCIP_VERSION }}
+                      SOPLEX_VERSION=${{ github.event.inputs.soplex_version || env.SOPLEX_VERSION }}
+                      IPOPT_VERSION=${{ github.event.inputs.ipopt_version || env.IPOPT_VERSION }}
+                  platforms: ${{ matrix.entry.platform }}
+                  outputs: |
+                      type=local,dest=${{ github.workspace }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+            - uses: actions/upload-artifact@v4
+              with:
+                  # TODO: Extract artifacts from multiplatform docker image
+                  path: ${{ github.workspace }}/libscip-${{ matrix.entry.os }}.zip

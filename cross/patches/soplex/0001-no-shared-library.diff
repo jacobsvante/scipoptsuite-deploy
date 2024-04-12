@@ -1,0 +1,13 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index d259115d..9c88a66a 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -169,7 +169,7 @@ target_include_directories(libsoplex PUBLIC
+ target_link_libraries(libsoplex ${libs})
+
+ # create C shared library
+-add_library(libsoplexshared SHARED soplex_interface.cpp ${sources})
++add_library(libsoplexshared STATIC soplex_interface.cpp ${sources})
+ if(MSVC)
+     setLibProperties(libsoplexshared "libsoplexshared")
+ else()
