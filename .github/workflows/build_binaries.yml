@@ -1,16 +1,16 @@
 name: build-binaries
 
 
-# Authors: 
+# Authors:
 # Mark Turner
-# Mohammed Ghannam 
+# Mohammed Ghannam
 # Stefan Vigerske
 # Franziska Schloesser
 # Julian Manns
 # Michael Winkler
 #
 # This is the base workflow script for generating SCIP libraries.
-# These libraries intended purpose is to be shipped with the various 
+# These libraries intended purpose is to be shipped with the various
 # SCIP interfaces for different programming languages (e.g. Python and Rust).
 # These libraries enable users of those interfaces to not have to install SCIP themselves outside of
 # the traditional package managers of their preferred programming languages.
@@ -57,31 +57,6 @@ jobs:
               echo "Soplex version: ${{github.event.inputs.soplex_version}}"
               echo "IPOPT version: ${{github.event.inputs.ipopt_version}}"
 
-    macos-build-binaries:
-        strategy:
-            matrix:
-              include:
-                - os: macos-14
-                  bash_script: macos_arm.bash
-                  id: macos-aarch64
-                - os: macos-latest
-                  bash_script: macos.bash
-                  id: macos-x86-64
-
-        runs-on: ${{ matrix.os }}
-        steps:
-            - uses: actions/checkout@v3
-            - name: Build and install SCIP
-              run: |
-                export SCIP_VERSION=$(echo "${{ github.event.inputs.scip_version }}" | tr -d '.')
-                export SOPLEX_VERSION=$(echo "${{ github.event.inputs.soplex_version }}" | tr -d '.')
-                export IPOPT_VERSION=${{ github.event.inputs.ipopt_version }}
-                bash .github/workflows/scripts/${{ matrix.bash_script }}
-        
-            - uses: actions/upload-artifact@v3
-              with:
-                path: ${{ github.workspace }}/libscip-${{ matrix.id }}.zip
-
     linux-build-binaries:
         strategy:
             matrix:
@@ -106,22 +81,3 @@ jobs:
             - uses: actions/upload-artifact@v3
               with:
                 path: ${{ github.workspace }}/libscip-${{ matrix.id }}.zip
-
-    windows-build-binaries:
-        runs-on: windows-latest
-        steps:
-          - uses: actions/checkout@v3
-          - uses: msys2/setup-msys2@v2      
-      
-          - name: Build and install SCIP
-            run:  |
-              export SCIP_VERSION=$(echo "${{github.event.inputs.scip_version}}" | tr -d '.')
-              export SOPLEX_VERSION=$(echo "${{github.event.inputs.soplex_version}}" | tr -d '.')
-              export IPOPT_VERSION=${{ github.event.inputs.ipopt_version }}
-              bash -x .github/workflows/scripts/windows.bash
-            shell: msys2 {0}
-          
-          - uses: actions/upload-artifact@v3
-            with:
-              path: ${{ github.workspace }}/libscip-windows.zip
-
