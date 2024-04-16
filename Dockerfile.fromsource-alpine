@@ -142,25 +142,19 @@ RUN apk add --no-cache libgcc libstdc++
 # included as static (except libgcc libstdc++ which I'm not can be linked statically)
 RUN /scip_install/bin/soplex -q
 RUN /scip_install/bin/scip
-# The whole point of this image is to fetch the zip and/or tar.gz files from it, in case
-# anyone runs the image, we print those files.
-ENTRYPOINT [ "ls", "-ahl", "/work/scipoptsuite-*" ]
 
-# Ensure that it's portable to other Linux distributions
-FROM debian:bookworm-slim AS debian_tester
-COPY --from=builder /work/scipoptsuite-linux* .
-RUN tar -xzf scipoptsuite-linux.tar.gz
-RUN apt-get install -y libstdc++
-# RUN file /scip_install/bin/scip
-RUN ldd /scip_install/bin/scip
-# RUN apt-get install -y libgcc
-# Ensure that soplex and scip run without error. This is to ensure that all libraries are
-# included as static (except libgcc libstdc++ which I'm not can be linked statically)
-# RUN /scip_install/bin/soplex
-RUN /scip_install/bin/scip --version
-# The whole point of this image is to fetch the zip and/or tar.gz files from it, in case
-# anyone runs the image, we print those files.
-ENTRYPOINT [ "ls", "-ahl", "/work/scipoptsuite-*" ]
-
-# FROM scratch
+# # Ensure that it's portable to other Linux distributions
+# FROM debian:bookworm-slim AS debian_tester
 # COPY --from=builder /work/scipoptsuite-linux* .
+# RUN tar -xzf scipoptsuite-linux.tar.gz
+# RUN apt-get install -y libstdc++
+# # RUN file /scip_install/bin/scip
+# RUN ldd /scip_install/bin/scip
+# # RUN apt-get install -y libgcc
+# # Ensure that soplex and scip run without error. This is to ensure that all libraries are
+# # included as static (except libgcc libstdc++ which I'm not can be linked statically)
+# # RUN /scip_install/bin/soplex
+# RUN /scip_install/bin/scip
+
+# # FROM scratch
+# # COPY --from=builder /work/scipoptsuite-linux* .
