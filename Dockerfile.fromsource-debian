@@ -1,0 +1,121 @@
+FROM debian:bookworm
+
+WORKDIR /work
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    gfortran \
+    git \
+    patch \
+    wget \
+    liblapack-dev \
+    unzip \
+    zip \
+    make \
+    build-essential
+
+# TODO: Why remove these?
+RUN find /usr/lib -name 'liblapack.s*' -or -name 'libblas.*' -exec rm {} \;
+
+RUN apt-get install -y curl cmake
+
+ARG SCIP_VERSION=3.14.12
+ARG SOPLEX_VERSION=7.0.0
+ARG IPOPT_VERSION=3.14.12
+
+ENV SCIP_VERSION=$SCIP_VERSION
+ENV SOPLEX_VERSION=$SOPLEX_VERSION
+ENV IPOPT_VERSION=$IPOPT_VERSION
+
+ARG BOOST_VERSION=1_82_0
+ENV BOOST_VERSION=$BOOST_VERSION
+
+ARG LAPACK_VERSION=3.12.0
+ENV LAPACK_VERSION=$LAPACK_VERSION
+
+ARG MUMPS_VERSION=3.0.5
+ENV MUMPS_VERSION=$MUMPS_VERSION
+
+ARG GMP_VERSION=6.3.0
+ENV GMP_VERSION=$GMP_VERSION
+
+RUN mkdir /usr/include/boost \
+    && curl -L https://boostorg.jfrog.io/artifactory/main/release/1.82.0/source/boost_${BOOST_VERSION}.tar.bz2 | tar -xj \
+    && mv boost_${BOOST_VERSION}/boost/* /usr/include/boost/.
+
+RUN curl -L https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v$LAPACK_VERSION.tar.gz | tar -xz \
+    && cd lapack-$LAPACK_VERSION \
+    && mkdir build \
+    && cd build \
+    && cmake .. \
+    && make -j \
+    && make install
+
+RUN mkdir -p scip_install/share
+COPY config.site scip_install/share/
+
+RUN apt-get install -y m4
+
+RUN curl -L https://github.com/pmmp/DependencyMirror/releases/download/mirror/gmp-$GMP_VERSION.tar.xz | tar -xJ \
+    && cd gmp-$GMP_VERSION \
+    && ./configure --with-pic --disable-shared --enable-cxx --prefix=/work/scip_install \
+    && make install -j
+
+RUN curl -L https://github.com/KarypisLab/METIS/archive/refs/tags/v5.1.1-DistDGL-v0.5.tar.gz | tar -xz \
+    && curl -L https://github.com/KarypisLab/GKlib/archive/refs/tags/METIS-v5.1.1-DistDGL-0.5.tar.gz | tar -xz \
+    && mkdir metis \
+    && cd GKlib-METIS-v5.1.1-DistDGL-0.5 \
+    && make config prefix=/work/GKlib-METIS-v5.1.1-DistDGL-0.5 \
+    && make \
+    && make install \
+    && cd ../METIS-5.1.1-DistDGL-v0.5 \
+    && make config prefix=/work/metis/ gklib_path=/work/GKlib-METIS-v5.1.1-DistDGL-0.5 \
+    && make \
+    && make install
+
+# # TODO: Getting error:
+# #           configure: error: Cannot link to user-specified Lapack -llapack_pic -lblas -lgfortran -lquadmath -lm.
+# #
+# # TODO UPDATE: Seems that original script actually fails to make and install:
+# #                  + make -j
+# #                  make: *** No targets specified and no makefile found.  Stop.
+# #                  + make install
+# #                  make: *** No rule to make target `install'.  Stop.
+# RUN curl -L https://github.com/coin-or-tools/ThirdParty-Mumps/archive/refs/tags/releases/$MUMPS_VERSION.tar.gz | tar -xz \
+#     && cd ThirdParty-Mumps-releases-$MUMPS_VERSION \
+#     && ./get.Mumps \
+#     && ./configure --enable-shared=no --enable-static=yes --prefix=/work/scip_install \
+#     && make -j \
+#     && make install
+
+RUN curl -L https://github.com/coin-or/Ipopt/archive/refs/tags/releases/$IPOPT_VERSION.tar.gz | tar -xz \
+    && cd Ipopt-releases-$IPOPT_VERSION \
+    && mkdir build \
+    && cd build \
+    && ../configure --prefix=/work/scip_install/ \
+    && make -j$(nproc) \
+    && make test V=1 || : \
+    && make install
+
+RUN curl -L https://github.com/scipopt/soplex/archive/refs/tags/release-$SOPLEX_VERSION.tar.gz | tar -xz \
+&&  cd soplex-release-$SOPLEX_VERSION \
+&&  mkdir build \
+&&  cd build \
+&&  cmake .. -DCMAKE_INSTALL_PREFIX=/work/scip_install -DCMAKE_BUILD_TYPE=Release -DGMP=true -DPAPILO=false -DGMP_DIR=$GITHUB_WORKSPACE/scip_install -DBOOST=true \
+&&  make -j$(nproc) \
+&&  make test \
+&&  make install
+
+RUN curl -L https://github.com/scipopt/scip/archive/refs/tags/v$SCIP_VERSION.tar.gz | tar -xz \
+    && cd scip-$SCIP_VERSION \
+    && mkdir build \
+    && cd build \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=/work/scip_install -DCMAKE_BUILD_TYPE=Release -DLPS=spx -DSYM=snauty -DSOPLEX_DIR=$GITHUB_WORKSPACE/scip_install -DPAPILO=false -DZIMPL=false -DGMP=true -DREADLINE=false -DIPOPT=true -DIPOPT_DIR=$GITHUB_WORKSPACE/scip_install -DGMP_DIR=$GITHUB_WORKSPACE/scip_install -DSHARED=false \
+    && make -j$(nproc) VERBOSE=true \
+    && make test \
+    && make install
+
+
+RUN mkdir scip_install/lib \
+    && mv scip_install/lib64/* scip_install/lib/. \
+    && zip -r $GITHUB_WORKSPACE/libscip-linux.zip scip_install/lib scip_install/include scip_install/bin

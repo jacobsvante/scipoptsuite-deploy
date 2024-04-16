@@ -1,0 +1,163 @@
+ARG MANYLINUX_IMAGE=quay.io/pypa/manylinux2014_aarch64
+FROM ${MANYLINUX_IMAGE} as builder
+
+WORKDIR /work
+
+RUN yum install -y \
+    gcc \
+    gcc-c++ \
+    libgfortran \
+    git \
+    patch \
+    wget \
+    unzip \
+    zip \
+    make \
+    glibc-static
+
+RUN mkdir -p scip_install/share && cat <<EOF > /work/scip_install/share/config.site
+enable_shared=no
+enable_java=no
+enable_sipopt=no
+with_pic=yes
+with_metis_cflags="-I/work/metis/include/"
+with_metis_lflags="-L/work/metis/lib -lmetis -lm"
+with_lapack_lflags="-llapack -lblas -lgfortran -lm"
+LT_LDFLAGS=-all-static
+LDFLAGS=-static
+EOF
+
+ARG ZLIB_VERSION=1.3.1
+RUN rm /usr/lib64/libz.so \
+    && curl -L  https://github.com/madler/zlib/archive/refs/tags/v${ZLIB_VERSION}.tar.gz | tar -xz \
+    && cd zlib-${ZLIB_VERSION} \
+    && mkdir build \
+    && cd build \
+    && cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON .. \
+    && make && mv libz.a /usr/lib
+
+ARG BOOST_VERSION=1.82.0
+RUN mkdir /usr/include/boost \
+    && curl -L https://boostorg.jfrog.io/artifactory/main/release/1.82.0/source/boost_$(echo ${BOOST_VERSION} | tr . _).tar.bz2 | tar -xj \
+    && mv boost_$(echo ${BOOST_VERSION} | tr . _)/boost/* /usr/include/boost/.
+
+ARG LAPACK_VERSION=3.12.0
+RUN curl -L https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v${LAPACK_VERSION}.tar.gz | tar -xz \
+    && cd lapack-${LAPACK_VERSION} \
+    && mkdir build \
+    && cd build \
+    && cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON .. \
+    && make -j \
+    && mv lib/liblapack.a lib/libblas.a /usr/lib64/
+
+ARG GMP_VERSION=6.3.0
+RUN curl -L https://github.com/pmmp/DependencyMirror/releases/download/mirror/gmp-${GMP_VERSION}.tar.xz | tar -xJ \
+    && cd gmp-${GMP_VERSION} \
+    && ./configure --with-pic --disable-shared --enable-cxx --prefix=/work/scip_install \
+    && make install -j
+
+ARG METIS_VERSION=5.1.1
+RUN curl -L https://github.com/KarypisLab/METIS/archive/refs/tags/v${METIS_VERSION}-DistDGL-v0.5.tar.gz | tar -xz \
+    && curl -L https://github.com/KarypisLab/GKlib/archive/refs/tags/METIS-v${METIS_VERSION}-DistDGL-0.5.tar.gz | tar -xz \
+    && mkdir metis \
+    && cd /work/GKlib-METIS-v${METIS_VERSION}-DistDGL-0.5 \
+    && make config prefix=/work/GKlib-METIS-v${METIS_VERSION}-DistDGL-0.5 \
+    && make \
+    && make install \
+    && cd /work/METIS-${METIS_VERSION}-DistDGL-v0.5 \
+    && make config prefix=/work/metis/ gklib_path=/work/GKlib-METIS-v${METIS_VERSION}-DistDGL-0.5 \
+    && make \
+    && make install
+
+ARG THIRDPARTY_MUMPS_VERSION=3.0.5
+RUN curl -L https://github.com/coin-or-tools/ThirdParty-Mumps/archive/refs/tags/releases/${THIRDPARTY_MUMPS_VERSION}.tar.gz | tar -xz \
+    && cd ThirdParty-Mumps-releases-${THIRDPARTY_MUMPS_VERSION} \
+    && ./get.Mumps \
+    && ./configure --enable-shared=no --enable-static=yes --prefix=/work/scip_install || (cat config.log && exit 1) \
+    && make -j \
+    && make install
+
+ARG IPOPT_VERSION=3.14.12
+RUN curl -L https://github.com/coin-or/Ipopt/archive/refs/tags/releases/${IPOPT_VERSION}.tar.gz | tar -xz \
+    && cd Ipopt-releases-${IPOPT_VERSION} \
+    && mkdir build \
+    && cd build \
+    && ../configure --prefix=/work/scip_install/ \
+    && make -j$(nproc) \
+    && make test V=1 || : \
+    && make install
+
+ARG SOPLEX_VERSION=7.0.0
+RUN curl -L https://github.com/scipopt/soplex/archive/refs/tags/release-$(echo ${SOPLEX_VERSION} | tr -d .).tar.gz | tar -xz \
+    && cd soplex-release-$(echo ${SOPLEX_VERSION} | tr -d .) \
+    && mkdir build \
+    && cd build \
+    && cmake .. \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DCMAKE_INSTALL_PREFIX=/work/scip_install \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGMP=true \
+        -DPAPILO=false \
+        -DGMP_DIR=/work/scip_install \
+        -DBOOST=true \
+    && make -j$(nproc) \
+    # && make test \
+    && make install
+
+ARG SCIP_VERSION=9.0.0
+RUN curl -L https://github.com/scipopt/scip/archive/refs/tags/v$(echo $SCIP_VERSION | tr -d .).tar.gz | tar -xz
+RUN cd scip-$(echo $SCIP_VERSION | tr -d .) \
+    && mkdir build \
+    && cd build \
+    && cmake .. \
+         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DCMAKE_INSTALL_PREFIX=/work/scip_install \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DLPS=spx \
+        -DSYM=snauty \
+        -DSOPLEX_DIR=/work/scip_install \
+        -DPAPILO=false \
+        -DZIMPL=false \
+        -DGMP=true \
+        -DREADLINE=false \
+        -DIPOPT=true \
+        -DIPOPT_DIR=/work/scip_install \
+        -DGMP_DIR=/work/scip_install \
+        -DSHARED=false \
+    && make -j$(nproc) VERBOSE=true \
+    # && make test \
+    && make install
+
+# Compress built libraries, for distribution as zip and tar.gz
+RUN mv scip_install/lib64/* scip_install/lib/. \
+    && zip -9 -r /work/libscip-linux.zip scip_install/lib scip_install/include scip_install/bin \
+    && tar -czvf /work/libscip-linux.tar.gz scip_install/lib scip_install/include scip_install/bin
+
+
+# FROM alpine:3.19 AS alpine_tester
+# COPY --from=builder /work/libscip-linux* .
+# RUN tar -xzf libscip-linux.tar.gz
+# RUN apk add --no-cache libgcc libstdc++
+# # Ensure that soplex and scip run without error. This is to ensure that all libraries are
+# # included as static (except libgcc libstdc++ which I'm not can be linked statically)
+# RUN apk add --no-cache file
+# RUN apk add --no-cache gcompat
+# RUN file /scip_install/bin/soplex
+# RUN ldd /scip_install/bin/soplex
+# RUN /scip_install/bin/soplex -q
+# RUN /scip_install/bin/scip
+# # The whole point of this image is to fetch the zip and/or tar.gz files from it, in case
+# # anyone runs the image, we print those files.
+# ENTRYPOINT [ "ls", "-ahl", "/work/libscip-*" ]
+
+FROM debian:bookworm-slim AS debian_tester
+COPY --from=builder /work/libscip-linux* .
+RUN tar -xzf libscip-linux.tar.gz
+RUN apt-get install -y libstdc++
+# Ensure that soplex and scip run without error. This is to ensure that all libraries are
+# included as static (except libgcc libstdc++ which I'm not can be linked statically)
+# RUN /scip_install/bin/soplex
+RUN /scip_install/bin/scip --version
+# The whole point of this image is to fetch the zip and/or tar.gz files from it, in case
+# anyone runs the image, we print those files.
+ENTRYPOINT [ "ls", "-ahl", "/work/libscip-*" ]
