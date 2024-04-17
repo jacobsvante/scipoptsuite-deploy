@@ -16,7 +16,9 @@ RUN apk add --no-cache \
     make \
     gfortran \
     zlib-static \
-    zlib-dev
+    zlib-dev \
+    xz \
+    m4
 
 RUN rm \
     /lib/libz.so \
@@ -37,6 +39,7 @@ LT_LDFLAGS=-all-static
 LDFLAGS=-static
 EOF
 
+# TODO: Can we use `apk add --no-cache boost1.82-static` instead?
 ARG BOOST_VERSION=1.82.0
 RUN mkdir /usr/include/boost \
     && curl -L https://boostorg.jfrog.io/artifactory/main/release/1.82.0/source/boost_$(echo ${BOOST_VERSION} | tr . _).tar.bz2 | tar -xj \
@@ -49,11 +52,9 @@ RUN curl -L https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v${LAPA
     && cd build \
     && cmake .. \
     && make -j \
-    # TODO: Why didn't their build script move libblas.a?
     && mv lib/liblapack.a lib/libblas.a /usr/lib/
 
 ARG GMP_VERSION=6.3.0
-RUN apk add --no-cache xz m4
 RUN curl -L https://github.com/pmmp/DependencyMirror/releases/download/mirror/gmp-${GMP_VERSION}.tar.xz | tar -xJ \
     && cd gmp-${GMP_VERSION} \
     && ./configure --with-pic --disable-shared --enable-cxx --prefix=/work/scip_install \
@@ -127,33 +128,33 @@ RUN cd scip-$(echo $SCIP_VERSION | tr -d .) \
         -DGMP_DIR=/work/scip_install \
         -DSHARED=false \
     && make -j$(nproc) VERBOSE=true \
-    && make test \
+    && MAXJOBS=$(nproc) make test \
     && make install
 
 # Compress compilation output, for distribution as zip and tar.gz
 RUN zip -9 -r /work/scipoptsuite-linux.zip scip_install/lib scip_install/include scip_install/bin \
     && tar -czvf /work/scipoptsuite-linux.tar.gz scip_install/lib scip_install/include scip_install/bin
 
-FROM alpine:3.19 AS alpine_tester
-COPY --from=builder /work/scipoptsuite-linux* .
-RUN tar -xzf scipoptsuite-linux.tar.gz
-RUN apk add --no-cache libgcc libstdc++
-# Ensure that soplex and scip run without error. This is to ensure that all libraries are
-# included as static (except libgcc libstdc++ which I'm not can be linked statically)
-RUN /scip_install/bin/soplex -q
-RUN /scip_install/bin/scip
-
-# # Ensure that it's portable to other Linux distributions
-# FROM debian:bookworm-slim AS debian_tester
+# FROM alpine:3.19 AS alpine_tester
 # COPY --from=builder /work/scipoptsuite-linux* .
 # RUN tar -xzf scipoptsuite-linux.tar.gz
-# RUN apt-get install -y libstdc++
-# # RUN file /scip_install/bin/scip
-# RUN ldd /scip_install/bin/scip
-# # RUN apt-get install -y libgcc
+# RUN apk add --no-cache libgcc libstdc++
 # # Ensure that soplex and scip run without error. This is to ensure that all libraries are
 # # included as static (except libgcc libstdc++ which I'm not can be linked statically)
-# # RUN /scip_install/bin/soplex
+# RUN /scip_install/bin/soplex -q
+# RUN /scip_install/bin/scip
+
+# Ensure that it's portable to other Linux distributions
+FROM debian:bookworm-slim AS debian_tester
+COPY --from=builder /work/scipoptsuite-linux* .
+RUN tar -xzf scipoptsuite-linux.tar.gz
+RUN apt-get install -y libstdc++
+# RUN file /scip_install/bin/scip
+RUN ldd /scip_install/bin/scip
+# RUN apt-get install -y libgcc
+# Ensure that soplex and scip run without error. This is to ensure that all libraries are
+# included as static (except libgcc libstdc++ which I'm not can be linked statically)
+RUN ldd /scip_install/bin/soplex
 # RUN /scip_install/bin/scip
 
 # # FROM scratch
