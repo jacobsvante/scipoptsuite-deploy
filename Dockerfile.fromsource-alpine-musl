@@ -2,7 +2,7 @@ ARG ALPINE_IMAGE=alpine:3.19
 FROM ${ALPINE_IMAGE} as builder_base
 
 ENV ALPINE_IMAGE=$ALPINE_IMAGE
-ENV LAPACK_LFLAGS="-llapack -lblas -lgfortran -lm"
+ENV LAPACK_LFLAGS="-l:liblapack.a -l:libblas.a -l:libgfortran.a -lm"
 
 WORKDIR /work
 
@@ -29,23 +29,10 @@ RUN mkdir -p scip_install/share && cat <<EOF > /work/scip_install/share/config.s
 enable_shared=no
 with_pic=yes
 LT_LDFLAGS=-all-static
-LDFLAGS='-no-pie -static'
+CFLAGS='-O3 -flto=auto'
+CXXFLAGS='-O3 -flto=auto'
+LDFLAGS='-flto=auto -static-pie'
 EOF
-
-# # Build a static zlib
-# FROM builder_base as zlib
-# ARG ZLIB_VERSION=1.3.1
-# RUN curl -L https://github.com/madler/zlib/archive/refs/tags/v${ZLIB_VERSION}.tar.gz \
-#         | tar -xz --strip-components 1
-# RUN mkdir build \
-#     && cd build \
-#     && cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=/work/scip_install .. \
-#     && make
-
-# FROM builder_base as boost
-# ARG BOOST_VERSION=1.82.0
-# RUN curl -L https://boostorg.jfrog.io/artifactory/main/release/1.82.0/source/boost_$(echo ${BOOST_VERSION} | tr . _).tar.bz2 \
-#         | tar -xj --strip-components 1
 
 FROM builder_base as lapack
 ARG LAPACK_VERSION=3.12.0
@@ -114,6 +101,7 @@ RUN curl -L https://github.com/coin-or/Ipopt/archive/refs/tags/releases/${IPOPT_
         | tar -xz --strip-components 1
 COPY --from=lapack /work/build/lib /usr/lib
 COPY --from=mumps /work/scip_install /work/scip_install
+COPY --from=metis /work/metis /work/metis
 RUN mkdir build \
     && cd build \
     && ../configure --prefix=/work/scip_install/ \
@@ -215,10 +203,7 @@ RUN mkdir build \
 # RUN /scip_install/bin/soplex --version 2>&1 > test-output/soplex.log
 # RUN /scip_install/bin/scip --version 2>&1 > test-output/scip.log
 
-# FROM $ALPINE_IMAGE AS final
-# COPY --from=compress /work/scipoptsuite-linux* .
-# COPY --from=debian_tester /test-output ./test-output/debian
-# COPY --from=debian_tester /ldd-output ./ldd-output/debian
-# COPY --from=alpine_tester /test-output ./test-output/alpine
-# COPY --from=alpine_tester /ldd-output ./ldd-output/alpine
-# RUN find ./ldd-output -name '*.txt' -exec echo {} \; -exec cat {} \;
+FROM $ALPINE_IMAGE AS final
+COPY --from=scip /work/scip_install /scip_install
+RUN apk add --no-cache libstdc++ libgcc
+RUN ldd ./scip_install/bin/scip && exit 1
