@@ -1,0 +1,28 @@
+version: 2.1
+jobs:
+  build_docker_image:
+    machine:
+      image: ubuntu-2204:current
+    resource_class: arm.large
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-{{ .Branch }}
+      - run:
+          name: Load Docker image layer cache
+          command: |
+            set +o pipefail
+            docker load -i /caches/app.tar | true
+      - run:
+          name: Build and Push application Docker image
+          command: |
+            docker buildx build \
+                --progress=plain \
+                -t scipoptsuite-fromsource:alpine-musl \
+                -f Dockerfile.fromsource-alpine-musl .
+
+workflows:
+  build:
+    jobs:
+      - build_docker_image
