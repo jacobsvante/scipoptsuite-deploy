@@ -19,6 +19,10 @@ RUN apk add --no-cache \
     zlib-static \
     m4 \
     patch
+    # clang17 \
+    # clang17-static
+
+# ENV CC=/usr/bin/clang CXX=/usr/bin/clang++
 
 # NOTE: libz.so gets picked up by soplex and scip otherwise
 RUN rm /lib/libz.so
@@ -29,11 +33,11 @@ RUN mkdir -p scip_install/share && cat <<EOF > /work/scip_install/share/config.s
 enable_shared=no
 with_pic=yes
 LT_LDFLAGS=-all-static
-CFLAGS='-O3 -flto=auto'
-CXXFLAGS='-O3 -flto=auto'
-LDFLAGS='-flto=auto -static-pie'
+LDFLAGS='-l:libc.a -l:libstdc++.a -l:libgcc.a -static -static-libgcc -static-libstdc++'
 EOF
 
+# Lapack
+# Download from: https://github.com/Reference-LAPACK/lapack
 FROM builder_base as lapack
 ARG LAPACK_VERSION=3.12.0
 RUN curl -L https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v${LAPACK_VERSION}.tar.gz \
@@ -133,9 +137,8 @@ RUN mkdir build \
         -DGMP_DIR=/work/scip_install \
         -DBOOST=true \
     && make -j$(nproc) \
-    # && make test \
+    && make test \
     && make install
-RUN ldd scip_install/bin/soplex
 
 # SCIP
 # https://github.com/scipopt/scip
@@ -166,7 +169,7 @@ RUN mkdir build \
         -DGMP_DIR=/work/scip_install \
         -DSHARED=false \
     && make -j$(nproc) VERBOSE=true \
-    # && MAXJOBS=$(nproc) make test \
+    && MAXJOBS=$(nproc) make test \
     && make install
 
 # # Collect all files and compress them as zip and tar.gz
@@ -206,4 +209,4 @@ RUN mkdir build \
 FROM $ALPINE_IMAGE AS final
 COPY --from=scip /work/scip_install /scip_install
 RUN apk add --no-cache libstdc++ libgcc
-RUN ldd ./scip_install/bin/scip && exit 1
+RUN ldd ./scip_install/bin/scip
