@@ -252,7 +252,7 @@ RUN mkdir build \
 
 # # Check that soplex and scip can run on Debian
 FROM alpine:3.9 AS alpine_tester
-RUN apk add file binutils
+RUN apk add --no-cache file binutils
 COPY --from=scip /work/scip_install/bin /usr/bin
 COPY --from=scip /work/scip_install/lib /usr/lib
 COPY --from=scip /work/scip_install/include /usr/include
@@ -269,3 +269,11 @@ COPY --from=scip /work/scip_install/include /usr/include
 COPY static-linking-check.sh .
 RUN chmod +x ./static-linking-check.sh
 CMD [ "./static-linking-check.sh" ]
+
+# Collect all files and compress them as zip and tar.gz
+FROM alpine:3.19 AS compress
+WORKDIR /work
+COPY --from=scip /work/scip_install /work/scip_install
+RUN apk add --no-cache zip \
+    && zip -9 -r /work/scipoptsuite-linux.zip scip_install/lib scip_install/include scip_install/bin \
+    && tar -czvf /work/scipoptsuite-linux.tar.gz scip_install/lib scip_install/include scip_install/bin
