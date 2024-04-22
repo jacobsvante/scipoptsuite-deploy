@@ -1,3 +1,7 @@
+# TODO list
+# "MUMPS will perform better if the matrix ordering algorithms implemented in METIS are available on the system."
+#    - verify!
+#
 # FROM debian:bookworm-slim
 FROM alpine:3.19 AS compiler
 
@@ -9,19 +13,22 @@ RUN apk add --no-cache curl alpine-sdk xz
 
 WORKDIR /work/musl-cross-make
 
-RUN curl -L https://github.com/richfelker/musl-cross-make/archive/refs/heads/master.tar.gz | tar -xz --strip-components 1
-RUN ls -ahl
+COPY sources/musl-cross-make.tar.gz .
+RUN cat musl-cross-make.tar.gz \
+# RUN curl -L https://github.com/richfelker/musl-cross-make/archive/678797f0625ea9e7a74aebdc0b7d2afcf3d66e07.tar.gz \
+    | tar -xz --strip-components 1
 
 # TODO: Change to aarch64-unknown-linux-musl
 ENV TARGET=aarch64-unknown-linux-musl \
     BINUTILS_VER=2.33.1 \
-    GCC_VER=11.2.0 \
+    GCC_VER=9.4.0 \
     GMP_VER=6.1.2 \
     LINUX_VER=4.19.88-1 \
     MPC_VER=1.1.0 \
     MPFR_VER=4.0.2 \
     MUSL_VER=1.2.5
 
+# COPY sources/musl-cross-make ./sources
 RUN make sources/binutils-${BINUTILS_VER}.tar.xz \
     && make sources/config.sub \
     && make sources/gcc-${GCC_VER}.tar.xz \
@@ -32,12 +39,12 @@ RUN make sources/binutils-${BINUTILS_VER}.tar.xz \
     && make sources/musl-${MUSL_VER}.tar.gz
 
 RUN cat <<EOF > ./config.mak
-TARGET = aarch64-unknown-linux-musl
+TARGET = $TARGET
 GCC_CONFIG += --enable-languages=c,c++,fortran
 GCC_CONFIG += --disable-shared
 GCC_CONFIG += --enable-static
 GCC_CONFIG += --enable-default-pie --enable-static-pie
-COMMON_CONFIG += LDFLAGS='-Wl,--no-dynamic-linker -static --static -static-libstdc++ -static-libgcc'
+COMMON_CONFIG += LDFLAGS='-static --static'
 EOF
 # COMMON_CONFIG += CC="aarch64-unknown-linux-musl-gcc -static --static" CXX="aarch64-unknown-linux-musl-g++ -static --static"
 # COMMON_CONFIG += CFLAGS="-g0 -Os" CXXFLAGS="-g0 -Os" LDFLAGS="-s"
@@ -67,25 +74,20 @@ ENV CC="/compilation/bin/aarch64-unknown-linux-musl-gcc" \
     CXX="/compilation/bin/aarch64-unknown-linux-musl-g++" \
     FC=/compilation/bin/aarch64-unknown-linux-musl-gfortran
 
-RUN cat <<EOF > ./hello.c
-#include <stdio.h>
+ENV CFLAGS='-fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc' \
+    CXXFLAGS='-fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc' \
+    LDFLAGS='-Wl,--trace -fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc'
 
-int main() {
-    printf("Hello");
-    return 0;
-}
-EOF
-RUN /compilation/bin/aarch64-unknown-linux-musl-gcc -static --static -static-libstdc++ -static-libgcc hello.c && file a.out \
-    && file ./a.out
-
-RUN mkdir -p scip_install/share && cat <<EOF > /work/scip_install/share/config.site
-enable_shared=no
-with_pic=yes
-CFLAGS='-static'
-CXXFLAGS='-static'
-LT_LDFLAGS=-all-static
-LDFLAGS='-static'
-EOF
+RUN mkdir hello \
+    && cd hello \
+    && printf "#include <stdio.h>\nint main() {printf(\"Hi\");return 0;}" > ./hello.c \
+    && $CC $LDFLAGS hello.c -o hello \
+    && readelf -a -W hello \
+    && file hello \
+    && ldd hello \
+    && ls -ahl hello \
+    # Ensure that the `-static-pie` flag is actually used by gcc
+    && file hello | grep 'static-pie linked'
 
 # Lapack
 # Download from: https://github.com/Reference-LAPACK/lapack
@@ -95,8 +97,11 @@ RUN curl -L https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v${LAPA
         | tar -xz --strip-components 1
 RUN mkdir build \
     && cd build \
-    && cmake -DCMAKE_INSTALL_PREFIX=/work/scip_install .. \
-    && make -j
+    && cmake -DCBLAS=yes -DCMAKE_INSTALL_PREFIX=/work/lapack .. \
+    && make -j \
+    && cp -R include /work/lapack/ \
+    && mkdir /work/lapack/lib/ \
+    && cp lib/libblas.a lib/liblapack.a /work/lapack/lib/
 
 # GMP
 # Homepage: https://gmplib.org/
@@ -107,7 +112,7 @@ RUN mkdir build && \
     curl -L https://github.com/pmmp/DependencyMirror/releases/download/mirror/gmp-${GMP_VERSION}.tar.xz \
         | tar -xJ --strip-components 1 -C build
 RUN cd build \
-    && ./configure --with-pic --disable-shared --enable-cxx --prefix=/work/scip_install \
+    && ./configure --with-pic --disable-shared --enable-cxx --prefix=/work/gmp \
     && make install -j
 
 # Metis & GKlib
@@ -138,11 +143,18 @@ FROM builder_base AS mumps
 ARG THIRDPARTY_MUMPS_VERSION=5.6.2.3
 RUN curl -L https://github.com/scivision/mumps/archive/refs/tags/v${THIRDPARTY_MUMPS_VERSION}.tar.gz \
         | tar -xz --strip-components 1
-COPY --from=lapack /work/build/lib /usr/lib
+COPY --from=lapack /work/lapack /usr
 COPY --from=metis /work/metis /usr
 RUN mkdir build && cd build \
-    && cmake -Dmetis=true -Dparallel=false -DCMAKE_INSTALL_PREFIX=/work/scip_install .. \
+    && cmake -Dmetis=true -Dparallel=false -DCMAKE_INSTALL_PREFIX=/work/mumps .. \
     && make install
+
+# TODO: Can we use openblas instead? Should we?
+FROM builder_base AS openblas
+RUN curl -L https://github.com/OpenMathLib/OpenBLAS/archive/refs/tags/v0.3.27.tar.gz \
+    | tar -xz --strip-components 1
+RUN make NO_SHARED=1
+RUN make install PREFIX=/work/openblas NO_SHARED=1
 
 # IPOPT
 # https://github.com/coin-or/Ipopt
@@ -150,21 +162,30 @@ RUN mkdir build && cd build \
 # TODO: Fix issue with running tests
 FROM builder_base AS ipopt
 ARG IPOPT_VERSION=3.14.12
+# ipopt tests need bash installed (!)
+RUN apk add --no-cache bash
 RUN curl -L https://github.com/coin-or/Ipopt/archive/refs/tags/releases/${IPOPT_VERSION}.tar.gz \
         | tar -xz --strip-components 1
-COPY --from=lapack /work/build/lib /usr/lib
-COPY --from=mumps /work/scip_install /work/scip_install
-# RUN find / -name libgfortran.a -or -name liblapack.a && exit 1
-ARG LAPACK_LFLAGS="-L/usr/lib -llapack -lblas -lgfortran -lm"
-ENV LAPACK_LFLAGS="${LAPACK_LFLAGS}"
+COPY --from=mumps /work/mumps /usr
+COPY --from=metis /work/metis /usr
+COPY --from=openblas /work/openblas /usr
 RUN mkdir build \
     && cd build \
+    # TODO: If we use /work/ipopt instead we get error:
+    #           Imported target "PkgConfig::_PC_IPOPT" includes non-existent path "/work/ipopt/include/coin-or"
     && ../configure --prefix=/work/scip_install/ \
+        --with-pic=yes \
+        --enable-static=yes \
+        --enable-shared=no \
         --disable-java \
         --disable-sipopt \
-        --with-lapack-lflags="${LAPACK_LFLAGS}" || (cat config.log && exit 1) \
+        --with-mumps-cflags="-I/usr/include" \
+        --with-mumps-lflags="-L/usr/lib -ldmumps -lmumps_common -lmetis -lopenblas -lmpiseq -lpord -lgfortran -lm" \
+        --disable-linear-solver-loader \
+        --with-lapack-cflags="-I/usr/include" \
+        --with-lapack-lflags="-L/usr/lib -lopenblas -lgfortran" \
     && make -j$(nproc) \
-    && (make test V=1 || :) \
+    && make test V=1 \
     && make install
 
 # Soplex
@@ -173,10 +194,10 @@ RUN mkdir build \
 # TODO: Support papilo?
 FROM builder_base AS soplex
 ARG SOPLEX_VERSION=7.0.0
-# RUN curl -L https://github.com/scipopt/soplex/archive/refs/tags/release-$(echo ${SOPLEX_VERSION} | tr -d .).tar.gz \
 RUN curl -L https://github.com/jacobsvante/soplex/archive/refs/heads/no-libsoplexshared-so.tar.gz \
+# RUN curl -L https://github.com/scipopt/soplex/archive/refs/tags/release-$(echo ${SOPLEX_VERSION} | tr -d .).tar.gz \
     | tar -xz --strip-components 1
-COPY --from=gmp /work/scip_install /work/scip_install
+COPY --from=gmp /work/gmp /usr
 RUN rm /compilation/aarch64-unknown-linux-musl/lib/libc.so
 RUN mkdir build \
     && cd build \
@@ -188,16 +209,11 @@ RUN mkdir build \
         -DPAPILO=false \
         -DBOOST=true \
     && make -j$(nproc) \
-    && cp -R lib bin /work/scip_install/
-    # && make test \
-    # TODO: `make install` wants to build libsoplexshared.so, which fails with "dangerous relocation" because of our -static-pic flag probably.
-    # && make install
-RUN cd build && make install
-# RUN find ./build -name soplex.h -or -name soplex-targets.cmake && exit 1
-# RUN cp \
-#     ./build/soplex-config.cmake \
-#     ./build/soplex-targets.cmake \
-#     /work/scip_install/
+    && make test \
+    # TODO: `make install` from original scipopt/soplex@7.0.0 wants to build
+    #       libsoplexshared.so, which fails with "dangerous relocation" because of
+    #       our -static-pic flag probably.
+    && make install
 
 # SCIP
 # https://github.com/scipopt/scip
@@ -206,11 +222,12 @@ FROM builder_base AS scip
 ARG SCIP_VERSION=9.0.0
 RUN curl -L https://github.com/scipopt/scip/archive/refs/tags/v$(echo $SCIP_VERSION | tr -d .).tar.gz \
     | tar -xz --strip-components 1
-COPY --from=lapack /work/build/lib/ /usr/lib/
-COPY --from=metis /work/metis /work/metis
-COPY --from=gmp /work/scip_install /work/scip_install
-COPY --from=soplex /work/scip_install /work/scip_install
+COPY --from=mumps /work/mumps /usr
+COPY --from=metis /work/metis /usr
+COPY --from=gmp /work/gmp /usr
+COPY --from=openblas /work/openblas /usr
 COPY --from=ipopt /work/scip_install /work/scip_install
+COPY --from=soplex /work/scip_install /work/scip_install
 RUN rm /compilation/aarch64-unknown-linux-musl/lib/libc.so
 RUN mkdir build \
     && cd build \
@@ -220,32 +237,35 @@ RUN mkdir build \
         -DLPS=spx \
         -DSYM=snauty \
         -DSOPLEX_DIR=/work/scip_install \
-        -DPAPILO=false \
-        -DZIMPL=false \
-        -DGMP=true \
-        -DREADLINE=false \
-        -DIPOPT=true \
+        -DPAPILO=off \
+        -DZIMPL=off \
+        -DGMP=on \
+        -DREADLINE=off \
+        -DIPOPT=on \
         -DIPOPT_DIR=/work/scip_install \
-        -DGMP_DIR=/work/scip_install \
-        -DSHARED=false \
+        -DLAPACK=off \
+        -DGMP_DIR=/usr \
+        -DSHARED=off \
     && make -j$(nproc) VERBOSE=true \
-    # && MAXJOBS=$(nproc) make test \
+    && MAXJOBS=$(nproc) make test \
     && make install
-
-# # Check that soplex and scip can run on Debian
-FROM debian:bookworm-slim AS debian_tester
-RUN apt-get update && apt-get install -y file binutils
-COPY --from=soplex /work/scip_install/bin/soplex .
-COPY --from=scip /work/scip_install/bin/scip .
-COPY static-linking-check.sh .
-RUN chmod +x ./static-linking-check.sh
-ENTRYPOINT [ "./static-linking-check.sh" ]
 
 # # Check that soplex and scip can run on Debian
 FROM alpine:3.9 AS alpine_tester
 RUN apk add file binutils
-COPY --from=soplex /work/scip_install/bin/soplex .
-COPY --from=scip /work/scip_install/bin/scip .
+COPY --from=scip /work/scip_install/bin /usr/bin
+COPY --from=scip /work/scip_install/lib /usr/lib
+COPY --from=scip /work/scip_install/include /usr/include
 COPY static-linking-check.sh .
 RUN chmod +x ./static-linking-check.sh
-ENTRYPOINT [ "./static-linking-check.sh" ]
+CMD [ "./static-linking-check.sh" ]
+
+# # Check that soplex and scip can run on Debian
+FROM debian:bookworm-slim AS debian_tester
+RUN apt-get update && apt-get install -y file binutils
+COPY --from=scip /work/scip_install/bin /usr/bin
+COPY --from=scip /work/scip_install/lib /usr/lib
+COPY --from=scip /work/scip_install/include /usr/include
+COPY static-linking-check.sh .
+RUN chmod +x ./static-linking-check.sh
+CMD [ "./static-linking-check.sh" ]
