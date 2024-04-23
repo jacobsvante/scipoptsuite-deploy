@@ -17,10 +17,14 @@ jobs:
       - run:
           name: Build and Push application Docker image
           command: |
-            docker buildx build \
+            mkdir -p /tmp/artifacts \
+            && docker buildx build \
                 --progress=plain \
-                -t scipoptsuite-fromsource:alpine-musl \
-                -f Dockerfile.fromsource-alpine-musl .
+                -t scipoptsuite:latest \
+                -f Dockerfile.fromsource-musl-cross . \
+                --output type=local,dest=/tmp/artifacts
+      - store_artifacts:
+          path: /tmp/artifacts
 
 workflows:
   build:

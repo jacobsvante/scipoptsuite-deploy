@@ -66,9 +66,11 @@ ENV CC="/compilation/bin/aarch64-unknown-linux-musl-gcc" \
     CXX="/compilation/bin/aarch64-unknown-linux-musl-g++" \
     FC=/compilation/bin/aarch64-unknown-linux-musl-gfortran
 
-ENV CFLAGS='-fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc' \
-    CXXFLAGS='-fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc' \
-    LDFLAGS='-Wl,--trace -fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc'
+ARG TEST=1
+ENV CFLAGS="-Os -flto -fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc" \
+    CXXFLAGS="-Os -flto -fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc" \
+    LDFLAGS="-Wl,--trace -Os -flto -fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc" \
+    TEST=${TEST}
 
 RUN mkdir hello \
     && cd hello \
@@ -93,7 +95,7 @@ RUN mkdir build \
     && make -j \
     && cp -R include /work/lapack/ \
     && mkdir /work/lapack/lib/ \
-    && cp lib/libblas.a lib/liblapack.a /work/lapack/lib/
+    && make install
 
 # GMP
 # Homepage: https://gmplib.org/
@@ -177,7 +179,10 @@ RUN mkdir build \
         --with-lapack-cflags="-I/usr/include" \
         --with-lapack-lflags="-L/usr/lib -lopenblas -lgfortran" \
     && make -j$(nproc) \
-    && make test V=1 \
+    && if [ "$TEST" = "1" ]; \
+        then make test V=1; \
+        else echo "Not running tests (TEST=1 not provided)"; \
+    fi \
     && make install
 
 # Soplex
@@ -186,7 +191,7 @@ RUN mkdir build \
 # TODO: Support papilo?
 FROM builder_base AS soplex
 ARG SOPLEX_VERSION=7.0.0
-RUN curl -L https://github.com/jacobsvante/soplex/archive/refs/heads/no-libsoplexshared-so.tar.gz \
+RUN curl -L https://github.com/jacobsvante/soplex/archive/7667488d82abda97269af0b17e5492dd8e5f3e7b.tar.gz \
 # RUN curl -L https://github.com/scipopt/soplex/archive/refs/tags/release-$(echo ${SOPLEX_VERSION} | tr -d .).tar.gz \
     | tar -xz --strip-components 1
 COPY --from=gmp /work/gmp /usr
@@ -202,7 +207,10 @@ RUN mkdir build \
         -DPAPILO=false \
         -DBOOST=true \
     && make -j$(nproc) \
-    && make test \
+    && if [ "$TEST" = "1" ]; \
+        then make test; \
+        else echo "Not running tests (TEST=1 not provided)"; \
+    fi \
     # TODO: `make install` from original scipopt/soplex@7.0.0 wants to build
     #       libsoplexshared.so, which fails with "dangerous relocation" because of
     #       our -static-pic flag probably.
@@ -241,7 +249,10 @@ RUN mkdir build \
         -DGMP_DIR=/usr \
         -DSHARED=off \
     && make -j$(nproc) VERBOSE=true \
-    && MAXJOBS=$(nproc) make test \
+    && if [ "$TEST" = "1" ]; \
+        then MAXJOBS=$(nproc) make test; \
+        else echo "Not running tests (TEST=1 not provided)"; \
+    fi \
     && make install
 
 # # Check that soplex and scip can run on Debian
@@ -271,3 +282,5 @@ COPY --from=scip /work/scip_install /work/scip_install
 RUN apk add --no-cache zip \
     && zip -9 -r /work/scipoptsuite-linux.zip scip_install/lib scip_install/include scip_install/bin \
     && tar -czvf /work/scipoptsuite-linux.tar.gz scip_install/lib scip_install/include scip_install/bin
+# Add some debugging helpers
+RUN apk add --no-cache binutils file
