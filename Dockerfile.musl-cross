@@ -1,4 +1,10 @@
-FROM alpine:3.19 AS compiler
+# Helpers to read out "target triple" from dockers automatic ARGs
+# See here for more info: https://github.com/tonistiigi/xx
+FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
+
+FROM --platform=$BUILDPLATFORM alpine:3.19 AS compiler
+COPY --from=xx / /
+ARG TARGETPLATFORM
 
 WORKDIR /work
 
@@ -11,9 +17,7 @@ WORKDIR /work/musl-cross-make
 RUN curl -L https://github.com/richfelker/musl-cross-make/archive/678797f0625ea9e7a74aebdc0b7d2afcf3d66e07.tar.gz \
     | tar -xz --strip-components 1
 
-ARG TARGET=aarch64-unknown-linux-musl
-ENV TARGET=${TARGET} \
-    BINUTILS_VER=2.33.1 \
+ENV BINUTILS_VER=2.33.1 \
     GCC_VER=9.4.0 \
     GMP_VER=6.1.2 \
     LINUX_VER=4.19.88-1 \
@@ -30,22 +34,24 @@ RUN make sources/binutils-${BINUTILS_VER}.tar.xz \
     && make sources/mpfr-${MPFR_VER}.tar.bz2 \
     && make sources/musl-${MUSL_VER}.tar.gz
 
-RUN cat <<EOF > ./config.mak
-TARGET = $TARGET
+RUN echo "TARGET = $(xx-info march)-unknown-linux-musl" > ./config.mak
+RUN cat <<EOF >> ./config.mak
 GCC_CONFIG += --enable-languages=c,c++,fortran
 GCC_CONFIG += --disable-shared
 GCC_CONFIG += --enable-static
 GCC_CONFIG += --enable-default-pie --enable-static-pie
 COMMON_CONFIG += LDFLAGS='-static --static'
 EOF
-# COMMON_CONFIG += CC="aarch64-unknown-linux-musl-gcc -static --static" CXX="aarch64-unknown-linux-musl-g++ -static --static"
-# COMMON_CONFIG += CFLAGS="-g0 -Os" CXXFLAGS="-g0 -Os" LDFLAGS="-s"
 
 RUN make -j$(nproc)
 RUN mkdir /compilation && echo 'OUTPUT = /compilation' >> ./config.mak && make install
-# RUN mv ./output/bin/* /usr/local/bin
+RUN ln -s /compilation/bin/*-unknown-linux-musl-gcc /compilation/bin/gcc
+RUN ln -s /compilation/bin/*-unknown-linux-musl-g++ /compilation/bin/g++
+RUN ln -s /compilation/bin/*-unknown-linux-musl-gfortran /compilation/bin/gfortran
 
 FROM alpine:3.19 AS builder_base
+COPY --from=xx / /
+
 WORKDIR /work
 COPY --from=compiler /compilation /compilation
 
@@ -59,9 +65,9 @@ RUN apk add --no-cache \
     zlib-static \
     m4
 
-ENV CC="/compilation/bin/aarch64-unknown-linux-musl-gcc" \
-    CXX="/compilation/bin/aarch64-unknown-linux-musl-g++" \
-    FC=/compilation/bin/aarch64-unknown-linux-musl-gfortran
+ENV CC="/compilation/bin/gcc" \
+    CXX="/compilation/bin/g++" \
+    FC="/compilation/bin/gfortran"
 
 ARG TEST=1
 ENV CFLAGS="-Os -flto -fPIC -fPIE -static-pie -static --static -static-libstdc++ -static-libgcc" \
