@@ -21,7 +21,7 @@ jobs:
             && docker buildx build \
                 --progress=plain \
                 -t scipoptsuite:latest \
-                -f Dockerfile.fromsource-musl-cross . \
+                -f Dockerfile.musl-cross . \
                 --output type=local,dest=/tmp/artifacts
       - store_artifacts:
           path: /tmp/artifacts
