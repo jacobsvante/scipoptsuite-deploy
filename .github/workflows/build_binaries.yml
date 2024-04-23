@@ -23,6 +23,7 @@ name: build-binaries
 #
 # Current support:
 # Linux x86-64
+# Linux AArch64
 # MacOS x86-64
 # MacOS ARM64
 # Windows x86-64

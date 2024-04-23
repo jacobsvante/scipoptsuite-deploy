@@ -8,13 +8,11 @@ RUN apk add --no-cache curl alpine-sdk xz
 
 WORKDIR /work/musl-cross-make
 
-COPY sources/musl-cross-make.tar.gz .
-RUN cat musl-cross-make.tar.gz \
-# RUN curl -L https://github.com/richfelker/musl-cross-make/archive/678797f0625ea9e7a74aebdc0b7d2afcf3d66e07.tar.gz \
+RUN curl -L https://github.com/richfelker/musl-cross-make/archive/678797f0625ea9e7a74aebdc0b7d2afcf3d66e07.tar.gz \
     | tar -xz --strip-components 1
 
-# TODO: Change to aarch64-unknown-linux-musl
-ENV TARGET=aarch64-unknown-linux-musl \
+ARG TARGET=aarch64-unknown-linux-musl
+ENV TARGET=${TARGET} \
     BINUTILS_VER=2.33.1 \
     GCC_VER=9.4.0 \
     GMP_VER=6.1.2 \
@@ -23,7 +21,6 @@ ENV TARGET=aarch64-unknown-linux-musl \
     MPFR_VER=4.0.2 \
     MUSL_VER=1.2.5
 
-# COPY sources/musl-cross-make ./sources
 RUN make sources/binutils-${BINUTILS_VER}.tar.xz \
     && make sources/config.sub \
     && make sources/gcc-${GCC_VER}.tar.xz \
@@ -280,7 +277,7 @@ FROM alpine:3.19 AS compress
 WORKDIR /work
 COPY --from=scip /work/scip_install /work/scip_install
 RUN apk add --no-cache zip \
-    && zip -9 -r /work/scipoptsuite-linux.zip scip_install/lib scip_install/include scip_install/bin \
-    && tar -czvf /work/scipoptsuite-linux.tar.gz scip_install/lib scip_install/include scip_install/bin
+    && zip -9 -r /work/libscip-linux.zip scip_install/lib scip_install/include scip_install/bin \
+    && tar -czvf /work/libscip-linux.tar.gz scip_install/lib scip_install/include scip_install/bin
 # Add some debugging helpers
 RUN apk add --no-cache binutils file
