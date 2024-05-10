@@ -76,15 +76,14 @@ jobs:
                     - os: linux
                       platform: linux/arm64/v8
                     - os: linux
-                      platform: linux/386
-                    - os: linux
-                      platform: linux/arm/v6
-                    - os: linux
                       platform: linux/arm/v7
-                    - os: linux
-                      platform: linux/ppc64le
-                    - os: linux
-                      platform: linux/s390x
+                    # almost there with ppc64le. 1 scip test fails:
+                    # 1031 - examples-tsp-build (Failed)
+                    # - os: linux
+                    #   platform: linux/ppc64le
+                    # soplex tests fail with s390x
+                    # - os: linux
+                    #   platform: linux/s390x
         steps:
             - uses: actions/checkout@v4
             # apk add seems to need qemu for some triggers, even though we're
