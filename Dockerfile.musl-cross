@@ -271,7 +271,6 @@ RUN xx-verify --static ./scip_install/bin/scip
 
 # # Verify that soplex and scip can run on Alpine
 # FROM alpine:3.9 AS alpine_tester
-# COPY --from=xx / /
 # RUN apk add --no-cache file binutils
 # COPY --from=scip /work/scip_install/bin /usr/bin
 # COPY --from=scip /work/scip_install/lib /usr/lib
